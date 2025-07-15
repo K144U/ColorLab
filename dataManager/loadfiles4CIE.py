@@ -112,7 +112,20 @@ class RGBImage(QMainWindow):
             else:
                 if file.endswith('.csv'):
                     try:
-                        uvvis_data = pd.read_csv(r"{0}/{1}".format(self.filepath,file), sep=None)
+                        uvvis_data = pd.read_csv(r"{0}/{1}".format(self.filepath,file), sep=None, engine='python')
+                    except:
+                        print(file + ' is corrupt!')
+                        
+                        if file==filelist[-1]:
+                            print('***************************')
+                            print('All files are corrupt!')
+                            print('***************************')
+                            sys.exit(0)
+                        else:
+                            continue
+                if file.endswith('.xls'):
+                    try:
+                        uvvis_data = pd.read_excel(r"{0}/{1}".format(self.filepath,file))
                     except:
                         print(file + ' is corrupt!')
                         
@@ -126,7 +139,7 @@ class RGBImage(QMainWindow):
                     
                 else:
                     try:
-                        uvvis_data = pd.read_table(r"{0}/{1}".format(self.filepath,file))
+                        uvvis_data = pd.read_table(r"{0}/{1}".format(self.filepath,file), engine='python')
                     except:
                         print(file + ' is corrupt!')
                         
@@ -139,7 +152,6 @@ class RGBImage(QMainWindow):
                             continue
                     
                 check_data = len(uvvis_data)
-                
                 if check_data == 0:
                     continue
                 
@@ -155,7 +167,6 @@ class RGBImage(QMainWindow):
                     # extract timestamp
                     curr_time = file.split('_')[-1]
                     curr_t = [int(word) for word in curr_time.split('.') if word.isdigit()]
-    
                     if curr_t[0] > 3660:
                         seconds_convert = 3600
                         units = 'Hours'

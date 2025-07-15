@@ -7,6 +7,11 @@ Created on Mon Oct 26 19:19:19 2020
 import pandas as pd 
 import numpy as np
 
+def data_cleanup(loaded_data):
+    loaded_data['Wavelength'] = loaded_data['Wavelength'].astype(int)
+    loaded_data = loaded_data.drop_duplicates(subset='Wavelength').reset_index()
+    return loaded_data
+
 def CIElab(spec_illum, illum, datatype, df_list, x_bar, y_bar, z_bar, calcRGB):
     if datatype == 0:
         subdf = df_list[['Wavelength', 'Absorbance']].copy()
@@ -20,7 +25,9 @@ def CIElab(spec_illum, illum, datatype, df_list, x_bar, y_bar, z_bar, calcRGB):
         subdf.rename(columns = {'FT':'Transmission'}, inplace=True)
     else:
         print('This should never print')
-    # print(subdf)
+    
+    
+    subdf = data_cleanup(subdf)
     wavelength = subdf["Wavelength"]
 
     step_size_data = abs(wavelength[0] - wavelength[1])
@@ -28,8 +35,8 @@ def CIElab(spec_illum, illum, datatype, df_list, x_bar, y_bar, z_bar, calcRGB):
     step_size = int(abs(illum["Wavelength"][0]-illum["Wavelength"][1])/step_size_data)
 
     # trim input data to the range of 380-780nm
-    temp_1 = subdf.loc[df_list["Wavelength"]==380].index[0]
-    temp_2 = subdf.loc[df_list["Wavelength"]==780].index[0]
+    temp_1 = subdf.loc[subdf["Wavelength"]==380].index[0]
+    temp_2 = subdf.loc[subdf["Wavelength"]==780].index[0]
 
     trimmed_data = subdf.iloc[temp_1:temp_2+1,:]
     trimmed_data = trimmed_data[['Wavelength','Transmission']]
