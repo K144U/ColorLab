@@ -134,6 +134,8 @@ def xyz2rbg(spec_illum,X,Y,Z):
         def clipping(C):
             if C > 1:
                 C = 1
+            if C < 0:
+                C = 0
             return C
 
 
