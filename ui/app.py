@@ -84,9 +84,9 @@ class ColorLabApp(ctk.CTk):
 
     # ---- button handlers ----
     def _validate_and_build_params(self, only_first: bool) -> ProcessingParams | None:
-        folder = self.controls.folder_var.get().strip()
-        if not folder:
-            messagebox.showwarning("ColorLab", "Please choose an input folder first.")
+        filepaths = getattr(self.controls, "selected_files", [])
+        if not filepaths:
+            messagebox.showwarning("ColorLab", "Please choose input files first.")
             return None
         illum = self.controls.illum_var.get().strip()
         if not illum:
@@ -102,7 +102,7 @@ class ColorLabApp(ctk.CTk):
         datatype = DATATYPE_LABELS.get(datatype_label, 0)
         title = self.controls.title_var.get().strip() or "ColorLab"
         return ProcessingParams(
-            folder=folder,
+            filepaths=filepaths,
             datatype=datatype,
             spec_illum=illum,
             title=title,

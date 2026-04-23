@@ -96,6 +96,7 @@ class ControlsPanel(ctk.CTkFrame):
         self._on_save = on_save
 
         self.folder_var = ctk.StringVar(value="")
+        self.selected_files: list[str] = []
         self.illum_var = ctk.StringVar(value=illuminants[0] if illuminants else "")
         self.datatype_var = ctk.StringVar(value="Absorbance")
         self.aspect_var = ctk.StringVar(value="1")
@@ -111,19 +112,19 @@ class ControlsPanel(ctk.CTkFrame):
         header.grid(row=row, column=0, columnspan=2, sticky="w", padx=16, pady=(16, 8))
         row += 1
 
-        # Folder picker
-        ctk.CTkLabel(self, text="Input folder").grid(
+        # File picker
+        ctk.CTkLabel(self, text="Input files").grid(
             row=row, column=0, sticky="w", padx=16
         )
         row += 1
-        folder_frame = ctk.CTkFrame(self, fg_color="transparent")
-        folder_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=16)
-        folder_frame.grid_columnconfigure(0, weight=1)
-        ctk.CTkEntry(folder_frame, textvariable=self.folder_var).grid(
+        file_frame = ctk.CTkFrame(self, fg_color="transparent")
+        file_frame.grid(row=row, column=0, columnspan=2, sticky="ew", padx=16)
+        file_frame.grid_columnconfigure(0, weight=1)
+        ctk.CTkEntry(file_frame, textvariable=self.folder_var, state="disabled").grid(
             row=0, column=0, sticky="ew"
         )
         ctk.CTkButton(
-            folder_frame, text="Browse", width=80, command=self._pick_folder
+            file_frame, text="Browse", width=80, command=self._pick_files
         ).grid(row=0, column=1, padx=(6, 0))
         row += 1
 
@@ -224,10 +225,21 @@ class ControlsPanel(ctk.CTkFrame):
 
         self.grid_columnconfigure(0, weight=1)
 
-    def _pick_folder(self) -> None:
-        path = filedialog.askdirectory(title="Select folder of spectra files")
-        if path:
-            self.folder_var.set(path)
+    def _pick_files(self) -> None:
+        import os
+        paths = filedialog.askopenfilenames(
+            title="Select spectra files",
+            filetypes=[
+                ("Spectra files", "*.txt *.csv *.xls *.xlsx"),
+                ("All files", "*.*"),
+            ]
+        )
+        if paths:
+            self.selected_files = list(paths)
+            if len(self.selected_files) == 1:
+                self.folder_var.set(os.path.basename(self.selected_files[0]))
+            else:
+                self.folder_var.set(f"{len(self.selected_files)} files selected")
 
     def set_running(self, running: bool) -> None:
         state = "disabled" if running else "normal"

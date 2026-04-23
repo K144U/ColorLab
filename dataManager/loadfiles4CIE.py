@@ -87,7 +87,7 @@ class NoValidDataError(Exception):
 
 @dataclass
 class ProcessingParams:
-    folder: str
+    filepaths: list[str]
     datatype: int
     spec_illum: str
     title: str
@@ -106,14 +106,14 @@ def list_illuminant_names() -> list[str]:
     return [c for c in cols if c != "Wavelength"]
 
 
-def _read_spectrum_file(folder: str, filename: str) -> pd.DataFrame:
-    full_path = os.path.join(folder, filename)
+def _read_spectrum_file(full_path: str) -> pd.DataFrame:
+    filename = os.path.basename(full_path)
     try:
         if filename.endswith(".csv"):
             return pd.read_csv(full_path, sep=None, engine="python")
-        if filename.endswith(".xls"):
+        if filename.endswith((".xls", ".xlsx")):
             return pd.read_excel(full_path)
-        return pd.read_table(full_path, engine="python")
+        return pd.read_table(full_path, sep=None, engine="python")
     except Exception as exc:
         raise FileReadError(filename, f"could not parse ({exc.__class__.__name__})") from exc
 
@@ -145,6 +145,20 @@ def _extract_timestamp(filename: str) -> Optional[int]:
     return int(digits) if digits else None
 
 
+def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
+    """Rename common variations of column names to the expected standard."""
+    col_map = {}
+    for col in df.columns:
+        scol = str(col).lower().strip()
+        if scol in ["wavelength", "wavelength (nm)", "nm", "w"]:
+            col_map[col] = "Wavelength"
+        elif scol in ["absorbance", "abs", "a"]:
+            col_map[col] = "Absorbance"
+        elif scol in ["transmission", "%t", "t"]:
+            col_map[col] = "Transmission"
+    return df.rename(columns=col_map)
+
+
 def compute_rgb_row(
     spec_illum: str,
     illum_df: pd.DataFrame,
@@ -152,6 +166,7 @@ def compute_rgb_row(
     uvvis_df: pd.DataFrame,
 ) -> tuple[float, float, float]:
     """Run a single spectrum through the CIE pipeline and return (R, G, B)."""
+    uvvis_df = normalize_columns(uvvis_df)
     _, _, _, r, g, b = CIElab(
         spec_illum, illum_df, datatype, uvvis_df, X_BAR, Y_BAR, Z_BAR, True
     )
@@ -290,24 +305,22 @@ def process_batch(
     """
     illum_df = load_illuminants_csv()
 
-    filenames = sorted(os.listdir(params.folder))
-    filenames = [
-        f for f in filenames if not os.path.isdir(os.path.join(params.folder, f))
-    ]
+    filenames = params.filepaths
     if params.only_first and filenames:
         filenames = filenames[:1]
     total = len(filenames)
     if total == 0:
-        raise NoValidDataError("folder contains no files")
+        raise NoValidDataError("no files selected")
 
     rgb_rows: list[tuple[float, float, float]] = []
     timestamps: list[Optional[int]] = []
 
-    for idx, name in enumerate(filenames):
+    for idx, path in enumerate(filenames):
+        name = os.path.basename(path)
         if should_cancel and should_cancel():
             break
         try:
-            df = _read_spectrum_file(params.folder, name)
+            df = _read_spectrum_file(path)
             if len(df) == 0:
                 raise FileReadError(name, "file is empty")
             rgb = compute_rgb_row(params.spec_illum, illum_df, params.datatype, df)
