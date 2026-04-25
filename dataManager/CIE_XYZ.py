@@ -23,6 +23,10 @@ def CIElab(spec_illum, illum, datatype, df_list, x_bar, y_bar, z_bar, calcRGB):
         subdf.rename(columns = {'Absorbance':'Transmission'}, inplace=True)
     elif datatype == 1:
         subdf = df_list[['Wavelength', 'Transmission']].copy()
+        # Auto-scale %T (0-100) to fractional (0-1). Values slightly above 100
+        # are tolerated (instrument noise on near-transparent references).
+        if subdf['Transmission'].max() > 1.5:
+            subdf['Transmission'] = subdf['Transmission'] / 100
     elif datatype == 2:
         subdf = df_list[['Wavelength', 'FT']].copy()
         subdf['FT'] = (1+subdf['FT']) * 100

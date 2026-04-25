@@ -148,3 +148,7 @@ cython_debug/
 # Image related stuff
 images/
 *.png
+
+# User spectra inputs
+*.xls
+*.xlsx

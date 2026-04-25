@@ -159,6 +159,47 @@ def normalize_columns(df: pd.DataFrame) -> pd.DataFrame:
     return df.rename(columns=col_map)
 
 
+_TARGET_COLUMN_BY_DATATYPE = {
+    DATATYPE_ABSORBANCE: "Absorbance",
+    DATATYPE_TRANSMISSION: "Transmission",
+    DATATYPE_AIPS: "FT",
+}
+
+
+def _iter_spectra_from_frame(
+    filename: str, df: pd.DataFrame, datatype: int
+) -> Iterator[tuple[str, pd.DataFrame]]:
+    """Yield one (label, single-spectrum DataFrame) per spectrum in a file.
+
+    Single-spectrum files (Wavelength + the expected data column) yield once
+    with the original frame. Wide multi-spectrum sheets (Wavelength + multiple
+    numeric columns) yield once per numeric column, with each frame reshaped
+    to look like a standard single-spectrum file so CIElab stays unchanged.
+    """
+    df = normalize_columns(df)
+    if "Wavelength" not in df.columns:
+        raise FileReadError(filename, "no recognizable wavelength column")
+
+    target = _TARGET_COLUMN_BY_DATATYPE.get(datatype, "Transmission")
+
+    if target in df.columns:
+        yield filename, df
+        return
+
+    numeric_cols = [
+        c for c in df.columns
+        if c != "Wavelength" and pd.api.types.is_numeric_dtype(df[c])
+    ]
+    if not numeric_cols:
+        raise FileReadError(
+            filename, f"no '{target}' column or numeric data columns found"
+        )
+
+    for col in numeric_cols:
+        sub = df[["Wavelength", col]].rename(columns={col: target})
+        yield f"{filename} :: {col}", sub
+
+
 def compute_rgb_row(
     spec_illum: str,
     illum_df: pd.DataFrame,
@@ -323,7 +364,7 @@ def process_batch(
             df = _read_spectrum_file(path)
             if len(df) == 0:
                 raise FileReadError(name, "file is empty")
-            rgb = compute_rgb_row(params.spec_illum, illum_df, params.datatype, df)
+            spectra = list(_iter_spectra_from_frame(name, df, params.datatype))
         except FileReadError as exc:
             if on_file_error:
                 on_file_error(exc.filename, exc.reason)
@@ -333,10 +374,29 @@ def process_batch(
                 on_file_error(name, f"{exc.__class__.__name__}: {exc}")
             continue
 
-        rgb_rows.append(rgb)
-        timestamps.append(_extract_timestamp(name))
-        if on_progress:
-            on_progress(idx + 1, total, name)
+        # Single-spectrum files keep the filename timestamp; wide multi-spectrum
+        # files share no real time axis, so they fall through to equal-width
+        # strips in build_color_matrix.
+        file_ts = _extract_timestamp(name) if len(spectra) == 1 else None
+
+        for label, sub_df in spectra:
+            try:
+                rgb = compute_rgb_row(
+                    params.spec_illum, illum_df, params.datatype, sub_df
+                )
+            except FileReadError as exc:
+                if on_file_error:
+                    on_file_error(exc.filename, exc.reason)
+                continue
+            except Exception as exc:  # pragma: no cover - defensive
+                if on_file_error:
+                    on_file_error(label, f"{exc.__class__.__name__}: {exc}")
+                continue
+
+            rgb_rows.append(rgb)
+            timestamps.append(file_ts)
+            if on_progress:
+                on_progress(idx + 1, total, label)
 
     if not rgb_rows:
         raise NoValidDataError("every file in the folder failed to process")
