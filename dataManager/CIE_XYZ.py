@@ -106,12 +106,16 @@ def CIElab(spec_illum, illum, datatype, df_list, x_bar, y_bar, z_bar, calcRGB):
         g = 0
         b = 0
 
-    #depreciated, too lazy to get rid of these vestigial variables.
-    CIE_L = 0
-    CIE_a = 0
-    CIE_b = 0
-    
-    return CIE_L,CIE_a,CIE_b,r,g,b
+    # Chromaticity coordinates (replace previously-deprecated L,a,b slots).
+    denom = CIE_X + CIE_Y + CIE_Z
+    if denom:
+        cx = CIE_X / denom
+        cy = CIE_Y / denom
+    else:
+        cx = 0.0
+        cy = 0.0
+
+    return cx, cy, 0.0, r, g, b
 
 def xyz2rbg(spec_illum,X,Y,Z):
     

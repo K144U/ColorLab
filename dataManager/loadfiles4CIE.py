@@ -6,8 +6,10 @@ Created on Mon Sep 28 19:40:09 2020
 """
 
 import os
+import re
 import sys
-import pandas as pd 
+import traceback
+import pandas as pd
 import numpy as np
 from dataManager.CIE_XYZ import CIElab
 import matplotlib.pyplot as plt
@@ -27,10 +29,17 @@ class RGBImage(QMainWindow):
         self.show()
         
     def click(self):
-        options = QFileDialog.Options()
-        options |= QFileDialog.DontUseNativeDialog
-        self.filepath = QFileDialog.getExistingDirectory(self,"Select File Directory")
-        self.gui.lineEdit.setText(self.filepath)
+        files, _ = QFileDialog.getOpenFileNames(
+            self,
+            "Select Spectra File(s)",
+            "",
+            "Spectra (*.csv *.xls *.xlsx);;All files (*)",
+        )
+        if not files:
+            return
+        self.filepath = os.path.dirname(files[0])
+        self.filelist = sorted(os.path.basename(f) for f in files)
+        self.gui.lineEdit.setText("; ".join(self.filelist))
         self.gui.lineEdit.setReadOnly(False)
         
      
@@ -44,8 +53,7 @@ class RGBImage(QMainWindow):
             datatype = 1
         if self.gui.radioButton_3.isChecked():
             datatype = 2
-        filelist = os.listdir(self.filepath)
-        filelist.sort()
+        filelist = self.filelist
         spec_illum = str(self.gui.comboBox.currentText()) # specify the illuminant
         image_title = str(self.gui.lineEdit_2.text())
         image_aspect = float(self.gui.lineEdit_3.text())
@@ -79,9 +87,10 @@ class RGBImage(QMainWindow):
         delta = np.zeros((1,num_files))
         i = 0
 
-        # pull first timestamp
-        first_time = filelist[0].split('_')[-1]
-        first_t = [int(word) for word in first_time.split('.') if word.isdigit()]
+        # pull first timestamp (only meaningful for kinetic series)
+        if num_files > 1:
+            first_time = filelist[0].split('_')[-1]
+            first_t = [int(word) for word in first_time.split('.') if word.isdigit()]
         
         # check that image title name is valid
         #re1 =  re.compile(r"^[^<>/{}[\]~`]*$")
@@ -91,6 +100,27 @@ class RGBImage(QMainWindow):
         if not os.path.isdir('images/'):
             os.mkdir('images/')
         image_name = r'images/' + image_name + '.png'
+
+        # If the user picked a single file with more than 2 columns, treat it
+        # as a wide-format concentration series (one wavelength column + one
+        # transmission/absorbance column per concentration).
+        if num_files == 1:
+            full_path = os.path.join(self.filepath, filelist[0])
+            try:
+                if full_path.lower().endswith(('.xls', '.xlsx')):
+                    peek = pd.read_excel(full_path)
+                else:
+                    peek = pd.read_csv(full_path, sep=None, engine='python')
+            except Exception:
+                traceback.print_exc()
+                peek = None
+            if peek is not None and peek.shape[1] > 2:
+                self._loadConcentrationSeries(
+                    peek, datatype, spec_illum, image_title, image_aspect,
+                    image_name, calc_rgb, x_bar, y_bar, z_bar,
+                )
+                return
+
         # if re1.match(image_title):
         #     print ("Image name is valid!")
         #     image_name = r'images/' + image_name + '.png'
@@ -123,7 +153,7 @@ class RGBImage(QMainWindow):
                             sys.exit(0)
                         else:
                             continue
-                if file.endswith('.xls'):
+                elif file.endswith(('.xls', '.xlsx')):
                     try:
                         uvvis_data = pd.read_excel(r"{0}/{1}".format(self.filepath,file))
                     except:
@@ -156,30 +186,32 @@ class RGBImage(QMainWindow):
                     continue
                 
                 try:
-                    L,a,b,rr,gg,bb = CIElab(spec_illum,illum,datatype,uvvis_data,x_bar,y_bar,z_bar,calc_rgb)
-                    lab_values[i,0] = L
-                    lab_values[i,1] = a
-                    lab_values[i,2] = b
+                    cx,cy,_,rr,gg,bb = CIElab(spec_illum,illum,datatype,uvvis_data,x_bar,y_bar,z_bar,calc_rgb)
+                    lab_values[i,0] = cx
+                    lab_values[i,1] = cy
+                    lab_values[i,2] = 0
                     lab_values[i,3] = rr
                     lab_values[i,4] = gg
                     lab_values[i,5] = bb
                     
-                    # extract timestamp
-                    curr_time = file.split('_')[-1]
-                    curr_t = [int(word) for word in curr_time.split('.') if word.isdigit()]
-                    if curr_t[0] > 3660:
-                        seconds_convert = 3600
-                        units = 'Hours'
-                    else:
-                        seconds_convert = 60
-                        units = 'Minutes'
-                                
-                    delta[0,i] = (curr_t[0] - first_t[0])/seconds_convert
-    
+                    # extract timestamp (kinetic series only)
+                    if num_files > 1:
+                        curr_time = file.split('_')[-1]
+                        curr_t = [int(word) for word in curr_time.split('.') if word.isdigit()]
+                        if curr_t[0] > 3660:
+                            seconds_convert = 3600
+                            units = 'Hours'
+                        else:
+                            seconds_convert = 60
+                            units = 'Minutes'
+
+                        delta[0,i] = (curr_t[0] - first_t[0])/seconds_convert
+
                     i += 1 # end for loop
                 except:
                     print('***********************************************************')
                     print('Could not convert data in ' + file)
+                    traceback.print_exc()
                     print('***********************************************************')
                     
                     if file==filelist[-1]:
@@ -252,7 +284,218 @@ class RGBImage(QMainWindow):
             ax.axes.get_yaxis().set_visible(False)
             ax.set_title(image_title)
             fig.savefig(image_name)
-        
-        
+
+        try:
+            self._saveChromaticityDiagram(lab_values, image_title, image_name,
+                                           x_bar, y_bar, z_bar)
+        except Exception:
+            traceback.print_exc()
+
         self.gui.statusbar.showMessage("Finished!")
-        
+
+    def _loadConcentrationSeries(self, df, datatype, spec_illum, image_title,
+                                 image_aspect, image_name, calc_rgb,
+                                 x_bar, y_bar, z_bar):
+        # First column is wavelength axis; remaining columns are spectra at
+        # successive concentrations. Header format expected: "<value> <unit>",
+        # e.g. "30 mM" or "12.5 uM".
+        wavelength_col = df.columns[0]
+        spectrum_cols = list(df.columns[1:])
+
+        header_re = re.compile(r'^\s*([+-]?\d+(?:\.\d+)?)\s*(\S.*?)?\s*$')
+        parsed = []
+        for c in spectrum_cols:
+            m = header_re.match(str(c))
+            if m:
+                value = float(m.group(1))
+                unit = (m.group(2) or '').strip()
+                parsed.append((value, unit, c))
+
+        if not parsed:
+            self.gui.statusbar.showMessage(
+                "Could not parse concentration headers in selected file"
+            )
+            return
+
+        parsed.sort(key=lambda t: t[0])
+        concentrations = np.array([p[0] for p in parsed])
+        unit = parsed[0][1] or 'concentration'
+        cols_in_order = [p[2] for p in parsed]
+        n = len(parsed)
+
+        target_col = {0: 'Absorbance', 1: 'Transmission', 2: 'FT'}[datatype]
+
+        # Auto-scale percent transmission to fraction (existing CIE math
+        # assumes T in [0, 1]; user supplied 0-100 percent).
+        scale = 1.0
+        if datatype == 1:
+            sample_max = float(np.nanmax(df[cols_in_order].to_numpy()))
+            if sample_max > 1.5:
+                scale = 0.01
+
+        lab_values = np.zeros((n, 6))
+        for i, col in enumerate(cols_in_order):
+            sub = pd.DataFrame({
+                'Wavelength': df[wavelength_col],
+                target_col: df[col] * scale if datatype == 1 else df[col],
+            })
+            try:
+                cx, cy, _, rr, gg, bb = CIElab(
+                    spec_illum, illum, datatype, sub,
+                    x_bar, y_bar, z_bar, calc_rgb,
+                )
+                lab_values[i] = [cx, cy, 0, rr, gg, bb]
+            except Exception:
+                print('Could not convert column ' + str(col))
+                traceback.print_exc()
+                continue
+
+        # Drop rows that stayed zero (failed conversions).
+        mask = ~np.all(lab_values == 0, axis=1)
+        lab_values = lab_values[mask]
+        concentrations = concentrations[mask]
+        n = len(lab_values)
+        if n == 0:
+            self.gui.statusbar.showMessage("No spectra could be converted")
+            return
+
+        if n > 1:
+            # Width of each color band proportional to the gap to the next
+            # concentration (rounded to integer pixels, minimum 1).
+            gaps = np.maximum(np.around(np.diff(concentrations)), 1).astype(int)
+            temp_dim = int(np.sum(gaps))
+            colormat = np.zeros((temp_dim, temp_dim, 3), dtype=np.uint8)
+            curr_idx = 0
+            first = True
+            for i in range(n - 1):
+                for k in range(int(gaps[i])):
+                    if first:
+                        colormat[:, i + k] = lab_values[i, 3:]
+                        curr_idx = i + k
+                        first = False
+                    else:
+                        curr_idx += 1
+                        colormat[:, curr_idx] = lab_values[i, 3:]
+            colormat = colormat[0:curr_idx + 1, 0:curr_idx + 1, :]
+
+            fig, ax = plt.subplots(1, 1)
+            ax.imshow(
+                colormat,
+                extent=[concentrations[0], np.max(concentrations),
+                        concentrations[0], np.max(concentrations)],
+                aspect=image_aspect,
+            )
+            ax.axes.get_yaxis().set_visible(False)
+            ax.set_xlabel(unit)
+            ax.set_title(image_title)
+            fig.savefig(image_name)
+        else:
+            colormat = np.zeros((1, 1, 3), dtype=np.uint16)
+            colormat[0, 0] = lab_values[0, 3:]
+            fig, ax = plt.subplots(1, 1)
+            ax.imshow(colormat, aspect=image_aspect)
+            ax.axes.get_xaxis().set_visible(False)
+            ax.axes.get_yaxis().set_visible(False)
+            ax.set_title(image_title)
+            fig.savefig(image_name)
+
+        try:
+            self._saveChromaticityDiagram(lab_values, image_title, image_name,
+                                           x_bar, y_bar, z_bar)
+        except Exception:
+            traceback.print_exc()
+
+        self.gui.statusbar.showMessage("Finished!")
+
+    def _saveChromaticityDiagram(self, lab_values, image_title, image_name,
+                                 x_bar, y_bar, z_bar):
+        """Save a CIE 1931 xy chromaticity diagram alongside the color strip.
+
+        lab_values rows are [cx, cy, _, r, g, b]. Row r/g/b are 0-255 ints
+        but may be floats; we normalise to 0-1 for matplotlib.
+        """
+        from matplotlib.path import Path
+
+        x_bar_a = np.asarray(x_bar, dtype=float)
+        y_bar_a = np.asarray(y_bar, dtype=float)
+        z_bar_a = np.asarray(z_bar, dtype=float)
+
+        # Spectral locus: chromaticity coords for each wavelength sample.
+        denom = x_bar_a + y_bar_a + z_bar_a
+        good = denom > 0
+        locus_x = x_bar_a[good] / denom[good]
+        locus_y = y_bar_a[good] / denom[good]
+        locus = np.column_stack([locus_x, locus_y])
+        locus_closed = np.vstack([locus, locus[:1]])  # close polygon for fill
+
+        # Build a filled-gamut RGB background by computing sRGB at each (x, y)
+        # cell on a grid, then masking points outside the locus polygon.
+        res = 256
+        grid_x = np.linspace(0.0, 0.8, res)
+        grid_y = np.linspace(0.0, 0.9, res)
+        gx, gy = np.meshgrid(grid_x, grid_y)
+        gz = 1.0 - gx - gy
+        with np.errstate(divide='ignore', invalid='ignore'):
+            X = np.where(gy > 0, gx / gy, 0.0)
+            Y = np.ones_like(gy)
+            Z = np.where(gy > 0, gz / gy, 0.0)
+        R = X * 3.2410 + Y * -1.5374 + Z * -0.4986
+        G = X * -0.9692 + Y * 1.8760 + Z * 0.0416
+        B = X * 0.0556 + Y * -0.2040 + Z * 1.0570
+        RGB = np.dstack([R, G, B])
+        RGB = np.clip(RGB, 0.0, 1.0)
+        # Gamma (sRGB) - vectorized form of the per-channel function in CIE_XYZ.
+        below = RGB < 0.0031308
+        RGB = np.where(below, 12.92 * RGB, 1.055 * np.power(RGB, 0.41666) - 0.055)
+        # Normalize each cell so the brightest channel hits 1.0 - this matches
+        # the conventional appearance of CIE diagrams (Y=1 produces very dim
+        # colors otherwise).
+        peak = np.max(RGB, axis=2, keepdims=True)
+        RGB = np.where(peak > 0, RGB / np.maximum(peak, 1e-6), RGB)
+        RGB = np.clip(RGB, 0.0, 1.0)
+
+        # Mask points outside the spectral locus polygon.
+        locus_path = Path(locus_closed)
+        pts = np.column_stack([gx.ravel(), gy.ravel()])
+        inside = locus_path.contains_points(pts).reshape(gx.shape)
+        alpha = inside.astype(float)
+        rgba = np.dstack([RGB, alpha])
+
+        fig, ax = plt.subplots(1, 1, figsize=(7, 6.5))
+        ax.imshow(rgba, origin='lower', extent=[0.0, 0.8, 0.0, 0.9],
+                  aspect='auto', interpolation='bilinear')
+
+        # Spectral locus outline + purple line.
+        ax.plot(locus_closed[:, 0], locus_closed[:, 1], color='black', lw=1.0)
+
+        # D65 white point.
+        d65_x, d65_y = 0.31271, 0.32902
+        ax.plot(d65_x, d65_y, marker='o', markersize=6,
+                markerfacecolor='white', markeredgecolor='black')
+        ax.annotate('White (D65)', xy=(d65_x, d65_y),
+                    xytext=(d65_x + 0.015, d65_y - 0.01),
+                    fontsize=9, color='black')
+
+        # Data points + connector lines from D65.
+        for row in lab_values:
+            cx, cy = float(row[0]), float(row[1])
+            if cx == 0.0 and cy == 0.0:
+                continue
+            r, g, b = float(row[3]) / 255.0, float(row[4]) / 255.0, float(row[5]) / 255.0
+            r, g, b = max(0.0, min(1.0, r)), max(0.0, min(1.0, g)), max(0.0, min(1.0, b))
+            ax.plot([d65_x, cx], [d65_y, cy], color=(r, g, b), lw=1.2)
+            ax.plot(cx, cy, marker='o', markersize=5,
+                    markerfacecolor=(r, g, b), markeredgecolor='black',
+                    markeredgewidth=0.5)
+
+        ax.set_xlim(0.0, 0.8)
+        ax.set_ylim(0.0, 0.9)
+        ax.set_xlabel('x co-ordinate')
+        ax.set_ylabel('y co-ordinate')
+        ax.set_title(image_title)
+        ax.grid(True, color='gray', alpha=0.25, linewidth=0.5)
+
+        out_path = image_name[:-4] + '_chromaticity.png' \
+            if image_name.lower().endswith('.png') else image_name + '_chromaticity.png'
+        fig.savefig(out_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
